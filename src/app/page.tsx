@@ -53,7 +53,6 @@ export default function Home() {
   );
   const [heightInput, setHeightInput] = useState<string>("");
   const [weightInput, setWeightInput] = useState<string>("");
-  const [chartMeasure, setChartMeasure] = useState<Measure>("height");
 
   const ageDecimal = useMemo((): number | null => {
     if (ageMode === "exact") {
@@ -85,7 +84,8 @@ export default function Home() {
     });
   }, [oiType, sex, ageDecimal, ageOutOfRange, heightInput, weightInput]);
 
-  const chartResult = results.find((r) => r.measure === chartMeasure)!;
+  const heightResult = results.find((r) => r.measure === "height")!;
+  const weightResult = results.find((r) => r.measure === "weight")!;
 
   return (
     <AppShell
@@ -238,87 +238,41 @@ export default function Home() {
         {/* Right: chart + results */}
         <div className="flex flex-col gap-4">
           <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 sm:p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                {chartMeasure === "height" ? "身長" : "体重"}標準曲線 — {OI_TYPE_LABEL[oiType]}
-              </p>
-              <div className="flex gap-1">
-                {(["height", "weight"] as Measure[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setChartMeasure(m)}
-                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                      chartMeasure === m
-                        ? "bg-blue-600 text-white"
-                        : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600"
-                    }`}
-                  >
-                    {m === "height" ? "身長" : "体重"}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">
+              身長・体重 標準曲線 — {OI_TYPE_LABEL[oiType]}
+            </p>
 
-            {chartResult.z !== null && (
-              <div className="mb-3 rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {chartMeasure === "height" ? "身長" : "体重"}SDS（Zスコア）
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              {results.map(({ measure, z, lms }) => (
+                <div key={measure} className="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3">
+                  <p className={`text-xs font-medium ${measure === "height" ? "text-blue-600 dark:text-blue-400" : "text-orange-600 dark:text-orange-400"}`}>
+                    {measure === "height" ? "身長" : "体重"}SDS
                   </p>
-                  <p className={`text-2xl font-bold tabular-nums ${zColor(chartResult.z)}`}>
-                    {chartResult.z >= 0 ? "+" : ""}
-                    {chartResult.z.toFixed(2)}
-                  </p>
-                  <p className="text-xs font-medium text-slate-600 dark:text-slate-400">{zInterpret(chartResult.z)}</p>
+                  {z !== null ? (
+                    <>
+                      <p className={`text-2xl font-bold tabular-nums ${zColor(z)}`}>
+                        {z >= 0 ? "+" : ""}
+                        {z.toFixed(2)}
+                      </p>
+                      <p className="text-xs font-medium text-slate-600 dark:text-slate-400">{zInterpret(z)}</p>
+                      <p className="mt-1 text-[10px] text-slate-400 dark:text-slate-500 font-mono">
+                        L {lms.L.toFixed(3)} / M {lms.M.toFixed(2)} / S {lms.S.toFixed(3)}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-2xl font-bold text-slate-300 dark:text-slate-600">—</p>
+                  )}
                 </div>
-                <div className="text-right text-xs text-slate-400 dark:text-slate-500 font-mono">
-                  <p>L = {chartResult.lms.L.toFixed(3)}</p>
-                  <p>M = {chartResult.lms.M.toFixed(2)}</p>
-                  <p>S = {chartResult.lms.S.toFixed(3)}</p>
-                </div>
-              </div>
-            )}
+              ))}
+            </div>
 
             <GrowthChart
               oiType={oiType}
               sex={sex}
-              measure={chartMeasure}
               ageYears={ageDecimal}
-              measuredValue={chartResult.val}
-              zScore={chartResult.z}
+              height={{ value: heightResult.val, zScore: heightResult.z }}
+              weight={{ value: weightResult.val, zScore: weightResult.z }}
             />
-
-            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-700">
-              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
-                SDS一覧
-                <span className="ml-1 font-normal text-slate-400 dark:text-slate-500">（クリックでグラフ切替）</span>
-              </p>
-              <div className="flex flex-col gap-1">
-                {results.map(({ measure, z }) => (
-                  <button
-                    key={measure}
-                    onClick={() => setChartMeasure(measure)}
-                    className={`flex items-center justify-between px-3 py-1.5 rounded-lg text-sm transition-colors text-left ${
-                      chartMeasure === measure
-                        ? "bg-blue-50 dark:bg-blue-950 border border-blue-400 dark:border-blue-500"
-                        : "hover:bg-slate-50 dark:hover:bg-slate-700 border border-transparent"
-                    }`}
-                  >
-                    <span className="text-slate-600 dark:text-slate-300 text-xs">
-                      {measure === "height" ? "身長SDS" : "体重SDS"}
-                    </span>
-                    {z !== null ? (
-                      <span className={`font-bold font-mono text-sm ${zColor(z)}`}>
-                        {z >= 0 ? "+" : ""}
-                        {z.toFixed(2)}
-                      </span>
-                    ) : (
-                      <span className="text-slate-300 dark:text-slate-600 text-xs">—</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
       </div>

@@ -4,201 +4,215 @@ import { useMemo } from "react";
 import { getLms, zToValue, AGE_MIN, AGE_MAX } from "@/lib/oiGrowth";
 import type { OiType, Sex, Measure } from "@/lib/oiGrowth";
 
-interface Props {
-  oiType: OiType;
-  sex: Sex;
-  measure: Measure;
-  ageYears: number | null;
-  measuredValue: number | null;
+interface Point {
+  value: number | null;
   zScore: number | null;
 }
 
-const CHART = {
-  vb: { w: 640, h: 380 },
-  pad: { top: 24, right: 56, bottom: 48, left: 56 },
-} as const;
+interface Props {
+  oiType: OiType;
+  sex: Sex;
+  ageYears: number | null;
+  height: Point;
+  weight: Point;
+}
 
-const plotW = CHART.vb.w - CHART.pad.left - CHART.pad.right;
-const plotH = CHART.vb.h - CHART.pad.top - CHART.pad.bottom;
-const plotX0 = CHART.pad.left;
-const plotY0 = CHART.pad.top;
+// 一般的な成長曲線と同じく、身長（左軸）を上側、体重（右軸）を下側に重ねて1枚で描く
+const VB = { w: 640, h: 560 };
+const PAD = { top: 24, right: 52, bottom: 44, left: 52 };
+const plotW = VB.w - PAD.left - PAD.right;
+const plotH = VB.h - PAD.top - PAD.bottom;
+const plotX0 = PAD.left;
+const plotY0 = PAD.top;
 const plotX1 = plotX0 + plotW;
 const plotY1 = plotY0 + plotH;
 
 const N_POINTS = 240;
+const Z_LINES = [2, 1, 0, -1, -2] as const;
+
+// 身長曲線の下端を図の下から35%、体重曲線の上端を下から60%に置く
+const HEIGHT_LOW_FRAC = 0.35;
+const WEIGHT_HIGH_FRAC = 0.6;
+
+const COLORS: Record<Measure, { line: string; band: string; dot: string }> = {
+  height: { line: "#2563eb", band: "rgba(37,99,235,0.08)", dot: "#1d4ed8" },
+  weight: { line: "#ea580c", band: "rgba(234,88,12,0.08)", dot: "#c2410c" },
+};
+
+const zLabel = (z: number) => (z === 0 ? "Mean" : `${z > 0 ? "+" : "−"}${Math.abs(z)}SD`);
 
 function toPath(pts: { x: number; y: number }[]): string {
   return pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" ");
 }
 
-function toBandPath(top: { x: number; y: number }[], bot: { x: number; y: number }[]): string {
-  const fwd = toPath(top);
-  const rev = [...bot].reverse().map((p) => `L${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" ");
-  return `${fwd} ${rev} Z`;
+function curvesFor(oiType: OiType, sex: Sex, measure: Measure, ages: number[]) {
+  return ages.map((age) => {
+    const lms = getLms(oiType, sex, measure, age);
+    const byZ = Object.fromEntries(Z_LINES.map((z) => [z, zToValue(z, lms)])) as Record<number, number>;
+    return { age, byZ };
+  });
 }
 
-const unitFor = (measure: Measure) => (measure === "height" ? "cm" : "kg");
-const labelFor = (measure: Measure) => (measure === "height" ? "身長" : "体重");
-
-export default function GrowthChart({ oiType, sex, measure, ageYears, measuredValue, zScore }: Props) {
-  const { curves, toX, toY, yTicks, xTicks } = useMemo(() => {
+export default function GrowthChart({ oiType, sex, ageYears, height, weight }: Props) {
+  const chart = useMemo(() => {
     const ages = Array.from({ length: N_POINTS + 1 }, (_, i) => AGE_MIN + (i / N_POINTS) * (AGE_MAX - AGE_MIN));
+    const hCurves = curvesFor(oiType, sex, "height", ages);
+    const wCurves = curvesFor(oiType, sex, "weight", ages);
 
-    const curveData = ages.map((age) => {
-      const lms = getLms(oiType, sex, measure, age);
-      return {
-        age,
-        m2: zToValue(-2, lms),
-        m1: zToValue(-1, lms),
-        mean: zToValue(0, lms),
-        p1: zToValue(1, lms),
-        p2: zToValue(2, lms),
-      };
-    });
+    // 身長軸（左）
+    const hVals = hCurves.flatMap((c) => [c.byZ[-2], c.byZ[2]]);
+    if (height.value !== null) hVals.push(height.value);
+    const hDataMin = Math.min(...hVals);
+    const hTop = Math.ceil((Math.max(...hVals) + 2) / 10) * 10;
+    const hBottom = (hDataMin - HEIGHT_LOW_FRAC * hTop) / (1 - HEIGHT_LOW_FRAC);
+    const hTickMin = Math.floor(hDataMin / 10) * 10;
+    const hTicks: number[] = [];
+    for (let v = hTickMin; v <= hTop; v += 10) hTicks.push(v);
 
-    const allVals = curveData.flatMap((c) => [c.m2, c.p2]);
-    if (measuredValue !== null) allVals.push(measuredValue);
-
-    const rawMin = Math.min(...allVals);
-    const rawMax = Math.max(...allVals);
-    const pad = (rawMax - rawMin) * 0.08;
-    const yMin = Math.max(0, rawMin - pad);
-    const yMax = rawMax + pad;
+    // 体重軸（右）
+    const wVals = wCurves.map((c) => c.byZ[2]);
+    if (weight.value !== null) wVals.push(weight.value);
+    const wDataMax = Math.max(...wVals);
+    const wTop = wDataMax / WEIGHT_HIGH_FRAC;
+    const wStep = wDataMax > 60 ? 10 : 5;
+    const wTicks: number[] = [];
+    for (let v = 0; v <= Math.ceil(wDataMax / wStep) * wStep; v += wStep) wTicks.push(v);
 
     const toX = (age: number) => plotX0 + ((age - AGE_MIN) / (AGE_MAX - AGE_MIN)) * plotW;
-    const toY = (val: number) => plotY1 - ((val - yMin) / (yMax - yMin)) * plotH;
+    const toYH = (v: number) => plotY1 - ((v - hBottom) / (hTop - hBottom)) * plotH;
+    const toYW = (v: number) => plotY1 - (v / wTop) * plotH;
 
-    const yStep = (yMax - yMin) / 5;
-    const yTicks = Array.from({ length: 6 }, (_, i) => yMin + yStep * i);
-    const xTicks = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20];
+    return { hCurves, wCurves, hTicks, wTicks, toX, toYH, toYW };
+  }, [oiType, sex, height.value, weight.value]);
 
-    return { curves: curveData, toX, toY, yTicks, xTicks };
-  }, [oiType, sex, measure, measuredValue]);
-
-  const pathFor = (key: "m2" | "m1" | "mean" | "p1" | "p2") =>
-    toPath(curves.map((c) => ({ x: toX(c.age), y: toY(c[key]) })));
+  const { hCurves, wCurves, hTicks, wTicks, toX, toYH, toYW } = chart;
+  const xTicks = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20];
 
   const inRange = ageYears !== null && ageYears >= AGE_MIN && ageYears <= AGE_MAX;
-  const patientX = inRange ? toX(ageYears as number) : null;
-  const patientY = inRange && measuredValue !== null ? toY(measuredValue) : null;
+  const px = inRange ? toX(ageYears as number) : null;
 
   const gridColor = "rgba(100,116,139,0.2)";
   const axisColor = "#94a3b8";
   const textColor = "#64748b";
 
+  const series = [
+    { measure: "height" as const, curves: hCurves, toY: toYH, point: height },
+    { measure: "weight" as const, curves: wCurves, toY: toYW, point: weight },
+  ];
+
   return (
-    <svg viewBox={`0 0 ${CHART.vb.w} ${CHART.vb.h}`} className="w-full h-auto" aria-label={`${labelFor(measure)}標準曲線`}>
-      {yTicks.map((val, i) => (
-        <line key={i} x1={plotX0} y1={toY(val)} x2={plotX1} y2={toY(val)} stroke={gridColor} strokeWidth={1} />
+    <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className="w-full h-auto" aria-label="身長・体重 標準成長曲線">
+      {/* grid: 横線は身長10cmごと、縦線は2歳ごと */}
+      {hTicks.map((v) => (
+        <line key={`hg${v}`} x1={plotX0} y1={toYH(v)} x2={plotX1} y2={toYH(v)} stroke={gridColor} strokeWidth={1} />
       ))}
       {xTicks.map((age) => (
-        <line key={age} x1={toX(age)} y1={plotY0} x2={toX(age)} y2={plotY1} stroke={gridColor} strokeWidth={1} />
+        <line key={`xg${age}`} x1={toX(age)} y1={plotY0} x2={toX(age)} y2={plotY1} stroke={gridColor} strokeWidth={1} />
       ))}
 
-      {/* ±1 SD — green */}
-      <path
-        d={toBandPath(
-          curves.map((c) => ({ x: toX(c.age), y: toY(c.p1) })),
-          curves.map((c) => ({ x: toX(c.age), y: toY(c.m1) }))
-        )}
-        fill="rgba(34,197,94,0.12)"
-        stroke="none"
-      />
-      {/* ±1-2 SD — amber */}
-      <path
-        d={toBandPath(
-          curves.map((c) => ({ x: toX(c.age), y: toY(c.p2) })),
-          curves.map((c) => ({ x: toX(c.age), y: toY(c.p1) }))
-        )}
-        fill="rgba(245,158,11,0.15)"
-        stroke="none"
-      />
-      <path
-        d={toBandPath(
-          curves.map((c) => ({ x: toX(c.age), y: toY(c.m1) })),
-          curves.map((c) => ({ x: toX(c.age), y: toY(c.m2) }))
-        )}
-        fill="rgba(245,158,11,0.15)"
-        stroke="none"
-      />
-      {/* beyond ±2 SD — red */}
-      <path
-        d={toBandPath(
-          curves.map((c) => ({ x: toX(c.age), y: plotY0 })),
-          curves.map((c) => ({ x: toX(c.age), y: toY(c.p2) }))
-        )}
-        fill="rgba(239,68,68,0.07)"
-        stroke="none"
-      />
-      <path
-        d={toBandPath(
-          curves.map((c) => ({ x: toX(c.age), y: toY(c.m2) })),
-          curves.map((c) => ({ x: toX(c.age), y: plotY1 }))
-        )}
-        fill="rgba(239,68,68,0.07)"
-        stroke="none"
-      />
-
-      <path d={pathFor("m2")} fill="none" stroke="#ef4444" strokeWidth={1.5} strokeDasharray="5,3" />
-      <path d={pathFor("m1")} fill="none" stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4,2" />
-      <path d={pathFor("mean")} fill="none" stroke="#22c55e" strokeWidth={2} />
-      <path d={pathFor("p1")} fill="none" stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4,2" />
-      <path d={pathFor("p2")} fill="none" stroke="#ef4444" strokeWidth={1.5} strokeDasharray="5,3" />
-
-      {[
-        { key: "p2" as const, label: "+2 SD", color: "#ef4444" },
-        { key: "p1" as const, label: "+1 SD", color: "#f59e0b" },
-        { key: "mean" as const, label: "Mean", color: "#22c55e" },
-        { key: "m1" as const, label: "−1 SD", color: "#f59e0b" },
-        { key: "m2" as const, label: "−2 SD", color: "#ef4444" },
-      ].map(({ key, label, color }) => {
+      {series.map(({ measure, curves, toY }) => {
+        const c = COLORS[measure];
+        const top = curves.map((p) => ({ x: toX(p.age), y: toY(p.byZ[2]) }));
+        const bot = curves.map((p) => ({ x: toX(p.age), y: toY(p.byZ[-2]) }));
+        const band = `${toPath(top)} ${[...bot].reverse().map((p) => `L${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" ")} Z`;
         const last = curves[curves.length - 1];
-        const y = toY(last[key]);
         return (
-          <text key={key} x={plotX1 + 4} y={y + 4} fontSize={9} fill={color} fontWeight={500}>
-            {label}
-          </text>
+          <g key={measure}>
+            <path d={band} fill={c.band} stroke="none" />
+            {Z_LINES.map((z) => (
+              <path
+                key={z}
+                d={toPath(curves.map((p) => ({ x: toX(p.age), y: toY(p.byZ[z]) })))}
+                fill="none"
+                stroke={c.line}
+                strokeWidth={z === 0 ? 2 : 1.2}
+                strokeDasharray={Math.abs(z) === 2 ? "5,3" : undefined}
+                opacity={z === 0 ? 1 : 0.75}
+              />
+            ))}
+            {Z_LINES.map((z) => (
+              <text
+                key={`l${z}`}
+                x={plotX1 - 3}
+                y={toY(last.byZ[z]) - 3}
+                textAnchor="end"
+                fontSize={9}
+                fill={c.line}
+                fontWeight={500}
+              >
+                {zLabel(z)}
+              </text>
+            ))}
+          </g>
         );
       })}
 
-      {patientX !== null && patientY !== null && (
-        <g>
-          <circle cx={patientX} cy={patientY} r={7} fill="#3b82f6" stroke="white" strokeWidth={3} />
-          {zScore !== null && (
-            <text x={patientX} y={patientY - 12} textAnchor="middle" fontSize={11} fontWeight={700} fill="#3b82f6">
-              Z={zScore >= 0 ? "+" : ""}
-              {zScore.toFixed(2)}
-            </text>
-          )}
-        </g>
-      )}
-
+      {/* axes */}
       <line x1={plotX0} y1={plotY0} x2={plotX0} y2={plotY1} stroke={axisColor} strokeWidth={1} />
+      <line x1={plotX1} y1={plotY0} x2={plotX1} y2={plotY1} stroke={axisColor} strokeWidth={1} />
       <line x1={plotX0} y1={plotY1} x2={plotX1} y2={plotY1} stroke={axisColor} strokeWidth={1} />
 
       {xTicks.map((age) => (
-        <g key={age}>
+        <g key={`xt${age}`}>
           <line x1={toX(age)} y1={plotY1} x2={toX(age)} y2={plotY1 + 4} stroke={axisColor} strokeWidth={1} />
           <text x={toX(age)} y={plotY1 + 16} textAnchor="middle" fontSize={11} fill={textColor}>
             {age}
           </text>
         </g>
       ))}
-      <text x={plotX0 + plotW / 2} y={CHART.vb.h - 6} textAnchor="middle" fontSize={11} fill={textColor}>
+      <text x={plotX0 + plotW / 2} y={VB.h - 6} textAnchor="middle" fontSize={11} fill={textColor}>
         年齢（歳）
       </text>
 
-      {yTicks.map((val, i) => (
-        <g key={i}>
-          <line x1={plotX0 - 4} y1={toY(val)} x2={plotX0} y2={toY(val)} stroke={axisColor} strokeWidth={1} />
-          <text x={plotX0 - 8} y={toY(val) + 4} textAnchor="end" fontSize={10} fill={textColor}>
-            {val.toFixed(measure === "weight" && val < 10 ? 1 : 0)}
+      {hTicks.map((v) => (
+        <g key={`ht${v}`}>
+          <line x1={plotX0 - 4} y1={toYH(v)} x2={plotX0} y2={toYH(v)} stroke={COLORS.height.line} strokeWidth={1} />
+          <text x={plotX0 - 7} y={toYH(v) + 4} textAnchor="end" fontSize={10} fill={COLORS.height.line}>
+            {v}
           </text>
         </g>
       ))}
-      <text x={12} y={plotY0 - 8} fontSize={10} fill={textColor}>
-        {labelFor(measure)}（{unitFor(measure)}）
+      <text x={plotX0 - 7} y={plotY0 - 8} textAnchor="end" fontSize={10} fill={COLORS.height.line} fontWeight={600}>
+        身長 cm
       </text>
+
+      {wTicks.map((v) => (
+        <g key={`wt${v}`}>
+          <line x1={plotX1} y1={toYW(v)} x2={plotX1 + 4} y2={toYW(v)} stroke={COLORS.weight.line} strokeWidth={1} />
+          <text x={plotX1 + 7} y={toYW(v) + 4} textAnchor="start" fontSize={10} fill={COLORS.weight.line}>
+            {v}
+          </text>
+        </g>
+      ))}
+      <text
+        x={plotX1 + 7}
+        y={toYW(wTicks[wTicks.length - 1]) - 14}
+        textAnchor="start"
+        fontSize={10}
+        fill={COLORS.weight.line}
+        fontWeight={600}
+      >
+        体重 kg
+      </text>
+
+      {/* patient points */}
+      {px !== null &&
+        series.map(({ measure, toY, point }) => {
+          if (point.value === null) return null;
+          const py = toY(point.value);
+          const c = COLORS[measure];
+          return (
+            <g key={`pt${measure}`}>
+              <circle cx={px} cy={py} r={6} fill={c.dot} stroke="white" strokeWidth={2.5} />
+              {point.zScore !== null && (
+                <text x={px + 10} y={py + 4} fontSize={11} fontWeight={700} fill={c.dot}>
+                  {point.zScore >= 0 ? "+" : ""}
+                  {point.zScore.toFixed(2)}
+                </text>
+              )}
+            </g>
+          );
+        })}
     </svg>
   );
 }
